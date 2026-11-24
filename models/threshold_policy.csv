@@ -1,0 +1,6 @@
+threshold,tp,fp,fn,tn,precision,recall,f1,fpr,flagged_rate,alerts,missed_value,cost,policy,purpose
+0.013333333333333334,43,193,9,42477,0.182203,0.826923,0.298611,0.004523,0.005524,236,1369.95,1746.2,cost_optimized,Minimises review cost plus missed-fraud cost
+0.24279000000002268,39,4,13,42666,0.906977,0.75,0.821053,9.4e-05,0.001007,43,2372.4,2572.4,balanced_f1,Balances precision and recall (F1)
+0.001,44,2059,8,40611,0.020922,0.846154,0.040835,0.048254,0.049225,2103,1357.64,4051.39,high_recall,Catches at least 95% of fraud
+0.24279000000002268,39,4,13,42666,0.906977,0.75,0.821053,9.4e-05,0.001007,43,2372.4,2572.4,high_precision,Keeps precision at or above 90%
+0.006666666666666667,43,605,9,42065,0.066358,0.826923,0.122857,0.014179,0.015168,648,1369.95,2261.2,review_capacity,Stays within 2% of traffic flagged

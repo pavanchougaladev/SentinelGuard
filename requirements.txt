@@ -1,0 +1,12 @@
+pandas
+numpy
+scikit-learn
+shap
+matplotlib
+joblib
+fastapi
+uvicorn[standard]
+pydantic
+prometheus-client
+streamlit>=1.67
+requests

@@ -1,0 +1,9 @@
+# Production overlay used by deploy/ec2-bootstrap.sh:
+#   docker compose -f docker-compose.yml -f docker-compose.prod.yml up -d --build
+#
+# The dashboard talks to http://api:8000 inside the compose network, so only
+# the browser-facing API needs the /api prefix used by the nginx proxy.
+services:
+  api:
+    environment:
+      API_ROOT_PATH: /api

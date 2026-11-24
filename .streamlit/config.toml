@@ -1,0 +1,90 @@
+# SentinelGuard dashboard theme
+# Locked dark appearance with a black operations background.
+# Colors are configured here (not injected CSS) so every native element,
+# chart, and dataframe follows the same design tokens.
+
+[theme]
+base = "dark"
+showWidgetBorder = true
+showSidebarBorder = true
+baseRadius = "8px"
+buttonRadius = "8px"
+font = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap"
+headingFont = "'Inter':https://fonts.googleapis.com/css2?family=Inter:wght@600;700&display=swap"
+codeFont = "'JetBrains Mono':https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;500&display=swap"
+baseFontSize = 14
+baseFontWeight = 400
+codeFontSize = "13px"
+headingFontSizes = ["30px", "24px", "20px", "17px", "15px", "13px"]
+headingFontWeights = [700, 700, 600, 600, 500, 500]
+metricValueFontSize = "2rem"
+metricValueFontWeight = 600
+linkUnderline = false
+paddingTop = "1.25rem"
+paddingBottom = "2.5rem"
+
+primaryColor = "#3B82F6"
+backgroundColor = "#000000"
+secondaryBackgroundColor = "#0D0D0D"
+codeBackgroundColor = "#0D0D0D"
+textColor = "#F2F2F2"
+linkColor = "#93C5FD"
+borderColor = "#262626"
+codeTextColor = "#D4D4D4"
+greenColor = "#34D399"
+redColor = "#F87171"
+yellowColor = "#FBBF24"
+orangeColor = "#FB923C"
+blueColor = "#60A5FA"
+violetColor = "#A78BFA"
+grayColor = "#94A3B8"
+chartCategoricalColors = [
+    "#60A5FA",
+    "#F87171",
+    "#34D399",
+    "#FBBF24",
+    "#A78BFA",
+    "#22D3EE",
+    "#94A3B8",
+    "#FB923C",
+]
+chartSequentialColors = [
+    "#000000",
+    "#0A1424",
+    "#0F2038",
+    "#14304F",
+    "#1A4066",
+    "#1D4E8A",
+    "#2563EB",
+    "#3B82F6",
+    "#60A5FA",
+    "#93C5FD",
+]
+chartDivergingColors = [
+    "#B91C1C",
+    "#DC2626",
+    "#F87171",
+    "#FCA5A5",
+    "#FEE2E2",
+    "#DBEAFE",
+    "#BFDBFE",
+    "#93C5FD",
+    "#60A5FA",
+    "#2563EB",
+]
+dataframeBorderColor = "#262626"
+dataframeHeaderBackgroundColor = "#0D0D0D"
+dataframeHeaderTextColor = "#F1F5F9"
+
+# The operations rail stays a touch lighter than the black canvas so it reads
+# as a separate surface.
+[theme.sidebar]
+backgroundColor = "#050505"
+secondaryBackgroundColor = "#101010"
+codeBackgroundColor = "#101010"
+textColor = "#E2E8F0"
+borderColor = "#1F1F1F"
+primaryColor = "#3B82F6"
+linkColor = "#93C5FD"
+paddingTop = "0.75rem"
+paddingBottom = "1.5rem"
