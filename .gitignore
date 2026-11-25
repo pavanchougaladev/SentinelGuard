@@ -58,6 +58,7 @@ models/cheque_audit.jsonl
 # Media capture intermediates (final screenshots and demo.mp4 are committed)
 docs/screenshots/_*
 docs/screenshots/*.tmp.png
+docs/audio/
 docs/*.tmp.mp4
 docs/*.tmp.m4v
 

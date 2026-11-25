@@ -19,7 +19,7 @@ On top of the batch model the stack adds four advanced detection capabilities:
   threshold, and flags concept drift with ADWIN.
 
 
-**[▶ Watch the 30-second demo walkthrough](docs/demo.mp4)**
+**[▶ Watch the 75-second narrated demo](docs/demo.mp4)**
 
 ## Run (about 30 minutes)
 Requires Python 3.10+ (CI targets 3.11; the local environment runs 3.13).
@@ -317,20 +317,26 @@ The online score is fused into the transaction agent only after the learner is w
 
 ![Drift monitor](docs/screenshots/drift.png)
 
-**[▶ Download the 30-second walkthrough (MP4, 3.3 MB)](docs/demo.mp4)**
+**[▶ Download the 75-second narrated walkthrough (MP4, 4.6 MB)](docs/demo.mp4)**
 
-Screenshots and the video are generated, not hand-taken. After a UI change run
+The screenshots and video are generated, not hand-taken. After a UI change run
 (needs Chrome and ffmpeg on PATH, override with `CHROME_PATH` / `FFMPEG`):
 
 ```bash
 python scripts/capture_media.py
+python -m pip install edge-tts          # once, for narration
+python scripts/voiceover.py
 ```
 
-The script starts a fresh API and dashboard (fails if ports 8000/8501 are busy;
-pass `--reuse-existing` to capture against a running stack), scores 160 demo
-transactions, bootstraps the River learner, uploads a generated cheque, exercises
-the agent, score, batch and drift controls, captures every dashboard page, writes
-`docs/screenshots/*.png`, and rebuilds the `docs/demo.mp4` walkthrough.
+`capture_media.py` starts a fresh API and dashboard (fails if ports 8000/8501 are
+busy; pass `--reuse-existing` to capture against a running stack), scores 160
+demo transactions, bootstraps the River learner, uploads a generated cheque,
+exercises the agent, score, batch and drift controls, captures every dashboard
+page, and writes `docs/screenshots/*.png` plus a silent `docs/demo.mp4`.
+
+`voiceover.py` synthesises one neural-voice line per scene with edge-tts, holds
+each screenshot long enough for its narration, and rewrites `docs/demo.mp4` with
+the mixed audio track. Use `--voice`, `--rate` or `--keep-audio` to tune it.
 
 ## Tests
 

@@ -24,18 +24,12 @@ ROOT = Path(__file__).resolve().parent.parent
 SHOTS = ROOT / "docs" / "screenshots"
 AUDIO = ROOT / "docs" / "audio"
 
-# Order matches the capture order in capture_media.py: the six pages, then the
-# cropped policy section of Model performance.
+# Order must match the capture order in capture_media.py.
 SCENES: list[tuple[str, str]] = [
     (
         "overview",
         "SentinelGuard flags fraudulent card transactions in real time, "
-        "from a scoring API to a live dashboard.",
-    ),
-    (
-        "score",
-        "The score console turns one transaction into a decision, "
-        "with SHAP drivers and an analyst-ready reason code.",
+        "from a scoring API to a live analyst dashboard.",
     ),
     (
         "activity",
@@ -43,9 +37,24 @@ SCENES: list[tuple[str, str]] = [
         "so blocks, reviews and alerts stay visible.",
     ),
     (
+        "score",
+        "The score console turns one transaction into a decision, "
+        "with SHAP drivers and an analyst-ready reason code.",
+    ),
+    (
         "batch",
         "Batch scoring tags a whole file in one call, "
         "useful for backfills, portfolio sweeps and investigations.",
+    ),
+    (
+        "agents",
+        "The agent console fuses independent transaction, identity and "
+        "mule-account findings into one explainable decision.",
+    ),
+    (
+        "cheque",
+        "Cheque vision reads an image with a Bedrock model, adds forensic "
+        "checks, and routes mismatches to manual review.",
     ),
     (
         "performance",
@@ -53,14 +62,24 @@ SCENES: list[tuple[str, str]] = [
         "and calibration against simple baselines.",
     ),
     (
+        "performance-policy",
+        "A threshold policy simulation turns analyst review capacity "
+        "into a cost-optimal operating point.",
+    ),
+    (
         "drift",
         "The drift monitor compares live traffic with the training window, "
         "using population stability per feature to raise alerts.",
     ),
     (
-        "performance-policy",
-        "And a threshold policy simulation turns analyst review capacity "
-        "into a cost-optimal operating point.",
+        "adaptive",
+        "Adaptive learning updates a River model after every labelled "
+        "decision, retunes its threshold, and watches for concept drift.",
+    ),
+    (
+        "federated",
+        "Federated training shares only clipped model updates, with secure "
+        "aggregation keeping raw customer rows inside each institution.",
     ),
 ]
 
