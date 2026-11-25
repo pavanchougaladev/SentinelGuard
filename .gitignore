@@ -43,10 +43,23 @@ data/*.csv
 
 # Generated model artifacts (rebuild with: python -m src.train / src.policy)
 models/*.joblib
+models/*.pkl
 models/*.jsonl
 models/metrics*.json
 models/reference*.csv
 models/shap_summary*.png
+models/federated_report.json
+models/federated_report.md
+models/federated_model.joblib
+models/online_model.pkl
+models/online_events.jsonl
+models/cheque_audit.jsonl
+
+# Media capture intermediates (final screenshots and demo.mp4 are committed)
+docs/screenshots/_*
+docs/screenshots/*.tmp.png
+docs/*.tmp.mp4
+docs/*.tmp.m4v
 
 # OS / editor files
 .DS_Store

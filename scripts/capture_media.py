@@ -2,8 +2,8 @@
 
 The script drives headless Chrome through the DevTools protocol (no extra Python
 packages beyond ``websockets``), scores demo traffic through the API, clicks the
-dashboard controls that need interaction (score form, drift check), and stitches
-the screenshots into an MP4 with ffmpeg.
+dashboard controls that need interaction (score form, agent cases, cheque upload,
+drift check), and stitches the screenshots into an MP4 with ffmpeg.
 
 Usage (from the project root):
     python scripts/capture_media.py
@@ -27,17 +27,23 @@ import time
 import urllib.error
 import urllib.request
 from pathlib import Path
+from typing import Any
 
 import websockets
 
 ROOT = Path(__file__).resolve().parents[1]
 PAGES = [
     ("overview", "/", [], "Overview"),
-    ("score", "/score", ["Account takeover", "Score transaction"], "Score console"),
     ("activity", "/activity", [], "Live activity"),
+    ("score", "/score", ["Account takeover", "Score transaction"], "Score console"),
     ("batch", "/batch", ["Score 50 sample transactions"], "Batch scoring"),
+    ("agents", "/agents", ["High-risk mule", "Run agents"], "Agent console"),
+    ("cheque", "/cheque", [], "Cheque vision"),
     ("performance", "/performance", [], "Model performance"),
+    ("performance-policy", "/performance", [], "Threshold policy"),
     ("drift", "/drift", ["Run drift check"], "Drift monitor"),
+    ("adaptive", "/adaptive", [], "Adaptive learning"),
+    ("federated", "/adaptive", ["Federated training"], "Federated training"),
 ]
 
 CHROME_CANDIDATES = [
@@ -83,11 +89,26 @@ def wait_for(url: str, seconds: int = 90) -> bool:
     return False
 
 
-def start_stack(api_url: str, app_url: str) -> list[subprocess.Popen]:
+def start_stack(api_url: str, app_url: str, reuse: bool = False) -> list[subprocess.Popen]:
     started: list[subprocess.Popen] = []
     env = dict(os.environ)
 
-    if not http_ok(f"{api_url}/health"):
+    api_running = http_ok(f"{api_url}/health")
+    app_running = http_ok(f"{app_url}/_stcore/health")
+    if not reuse and (api_running or app_running):
+        busy = []
+        if api_running:
+            busy.append("8000 (API)")
+        if app_running:
+            busy.append("8501 (dashboard)")
+        raise SystemExit(
+            "A stack is already running on port "
+            + " and ".join(busy)
+            + ". Stop it so fresh code and the current virtual environment are "
+            "captured, or pass --reuse-existing."
+        )
+
+    if not api_running:
         print("starting scoring API ...")
         started.append(
             subprocess.Popen(
@@ -99,7 +120,7 @@ def start_stack(api_url: str, app_url: str) -> list[subprocess.Popen]:
             )
         )
 
-    if not http_ok(f"{app_url}/_stcore/health"):
+    if not app_running:
         print("starting Streamlit dashboard ...")
         started.append(
             subprocess.Popen(
@@ -118,22 +139,26 @@ def start_stack(api_url: str, app_url: str) -> list[subprocess.Popen]:
 
     if not wait_for(f"{api_url}/health"):
         raise SystemExit("The scoring API did not become ready on port 8000.")
-    if not api_has_policy(api_url):
+    if not api_has_features(api_url):
         raise SystemExit(
-            "The API on port 8000 is running an old build without /policy. "
-            "Stop it and rerun so the current code is captured."
+            "The API on port 8000 is running an old build without the agent, "
+            "cheque, or online-learning endpoints. Stop it and rerun so the "
+            "current code is captured."
         )
     if not wait_for(f"{app_url}/_stcore/health"):
         raise SystemExit("The dashboard did not become ready on port 8501.")
     return started
 
 
-def api_has_policy(api_url: str) -> bool:
-    try:
-        with urllib.request.urlopen(f"{api_url}/policy?mode=kaggle", timeout=3) as response:
-            return response.status == 200
-    except (urllib.error.URLError, OSError):
-        return False
+def api_has_features(api_url: str) -> bool:
+    for path in ("/agents/catalog", "/online/status", "/policy?mode=kaggle"):
+        try:
+            with urllib.request.urlopen(f"{api_url}{path}", timeout=3) as response:
+                if response.status != 200:
+                    return False
+        except (urllib.error.URLError, OSError):
+            return False
+    return True
 
 
 def stop_stack(processes: list[subprocess.Popen]) -> None:
@@ -173,6 +198,103 @@ def generate_traffic(api_url: str, count: int) -> None:
         except requests.RequestException:
             break
     print(f"scored {scored} demo transactions")
+
+
+def warm_online_learner(api_url: str, rows: int = 3000, labels: int = 40) -> None:
+    """Bootstrap the River learner and feed labelled outcomes for a live view."""
+    import requests
+
+    try:
+        response = requests.post(
+            f"{api_url}/online/bootstrap",
+            json={"rows": rows, "reset": True},
+            timeout=120,
+        )
+        response.raise_for_status()
+    except requests.RequestException as exc:
+        print(f"online bootstrap failed: {exc}")
+        return
+
+    fraud = {
+        "amount": 9_400.0, "tx_type": "transfer", "merchant_category": "crypto",
+        "country": "RU", "device_risk": 0.92, "ip_risk": 0.88,
+        "account_age_days": 4, "tx_count_24h": 34,
+    }
+    legitimate = {
+        "amount": 85.0, "tx_type": "purchase", "merchant_category": "grocery",
+        "country": "IN", "device_risk": 0.10, "ip_risk": 0.05,
+        "account_age_days": 900, "tx_count_24h": 1,
+    }
+    scored = 0
+    for index in range(labels):
+        label = 1 if index % 5 == 0 else 0
+        payload = {
+            "transaction": fraud if label else legitimate,
+            "label": label,
+        }
+        try:
+            response = requests.post(
+                f"{api_url}/online/learn", json=payload, timeout=30
+            )
+            scored += int(response.ok)
+        except requests.RequestException:
+            break
+    print(f"bootstrapped {rows} rows and fed {scored} labelled online updates")
+
+
+def make_demo_cheque(path: Path) -> Path:
+    """Render a synthetic cheque with editing-software EXIF for the capture."""
+    from PIL import Image, ImageDraw, ImageFont
+
+    def font(size: int) -> Any:
+        for candidate in (
+            r"C:\Windows\Fonts\arial.ttf",
+            r"C:\Windows\Fonts\calibri.ttf",
+            "/System/Library/Fonts/Supplemental/Arial.ttf",
+            "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        ):
+            if Path(candidate).exists():
+                return ImageFont.truetype(candidate, size)
+        return ImageFont.load_default()
+
+    width, height = 1600, 720
+    image = Image.new("RGB", (width, height), "#F6F3E8")
+    draw = ImageDraw.Draw(image)
+    ink = "#1F2937"
+
+    draw.rectangle((28, 28, width - 28, height - 28), outline="#B9C2CF", width=3)
+    for offset in range(90, height - 90, 46):
+        draw.line((40, offset, width - 40, offset), fill="#EDE8D6", width=1)
+
+    draw.text((70, 66), "NORTHWIND TRUST BANK", font=font(42), fill="#0F4C81")
+    draw.text((70, 122), "221B Harbour Street · Singapore 018989", font=font(20), fill="#475569")
+    draw.text((width - 420, 70), "CHEQUE NO.  004821", font=font(24), fill=ink)
+    draw.text((width - 420, 108), "DATE  20 Nov 2026", font=font(24), fill=ink)
+
+    draw.text((70, 230), "PAY TO THE ORDER OF", font=font(20), fill="#64748B")
+    draw.text((70, 258), "Acme Holdings Pte Ltd", font=font(38), fill=ink)
+    draw.line((70, 310, 1010, 310), fill="#94A3B8", width=2)
+
+    draw.text((70, 350), "AMOUNT IN WORDS", font=font(20), fill="#64748B")
+    draw.text((70, 378), "Nine thousand four hundred and 00/100", font=font(28), fill=ink)
+    draw.line((70, 424, 1010, 424), fill="#94A3B8", width=2)
+
+    draw.rectangle((1080, 220, 1510, 300), outline="#94A3B8", width=2)
+    draw.text((1100, 240), "$ 9,400.00", font=font(40), fill=ink)
+
+    draw.text((70, 470), "MEMO", font=font(18), fill="#64748B")
+    draw.text((70, 496), "Invoice INV-8842", font=font(24), fill=ink)
+    draw.text((1080, 470), "AUTHORISED SIGNATURE", font=font(18), fill="#64748B")
+    draw.line((1080, 540, 1510, 540), fill="#94A3B8", width=2)
+    draw.text((1180, 505), "A. Tan", font=font(30), fill="#0F4C81")
+
+    draw.text((70, 620), "MICR  021000021  4821  1042", font=font(30), fill=ink)
+
+    exif = Image.Exif()
+    exif[0x0131] = "Adobe Photoshop 25.0 (Windows)"
+    exif[0x0132] = "2026:11:20 14:32:11"
+    image.save(path, "JPEG", quality=90, exif=exif)
+    return path
 
 
 # ---------------------------------------------------------------------------
@@ -243,7 +365,7 @@ class Chrome:
     async def click(self, label: str, timeout: float = 20.0) -> bool:
         expression = """
         (() => {
-          const buttons = [...document.querySelectorAll('button')];
+          const buttons = [...document.querySelectorAll('button, [role="tab"]')];
           const target = buttons.find(
             (node) => node.textContent.replace(/\\s+/g, ' ').includes(%s)
           );
@@ -258,6 +380,116 @@ class Chrome:
                 "Runtime.evaluate", expression=expression, returnByValue=True
             )
             if result.get("result", {}).get("value") == "clicked":
+                return True
+            await asyncio.sleep(0.5)
+        return False
+
+    async def scroll_to(
+        self, text: str, offset: int = -24, timeout: float = 20.0
+    ) -> bool:
+        expression = """
+        (() => {
+          const all = [...document.querySelectorAll('body *')];
+          const exact = all.find(
+            (node) => node.children.length === 0 && node.textContent.trim() === %s
+          );
+          const matches = all.filter(
+            (node) => node.textContent && node.textContent.includes(%s)
+          );
+          const target = exact || matches[matches.length - 1];
+          if (!target) return false;
+          target.scrollIntoView({block: 'start'});
+          let scroller = target.parentElement;
+          while (scroller) {
+            const overflow = getComputedStyle(scroller).overflowY;
+            if ((overflow === 'auto' || overflow === 'scroll')
+                && scroller.scrollHeight > scroller.clientHeight) {
+              break;
+            }
+            scroller = scroller.parentElement;
+          }
+          if (scroller) scroller.scrollTop += %d;
+          else window.scrollBy(0, %d);
+          return true;
+        })()
+        """ % (json.dumps(text), json.dumps(text), offset, offset)
+        return bool(await self.wait_js(expression, timeout=timeout))
+
+    async def wait_for_number(
+        self, label_text: str, expected: float, timeout: float = 30.0
+    ) -> bool:
+        """Wait until a labelled number field shows a preset value."""
+        expression = """
+        (() => {
+          const labels = [...document.querySelectorAll('label')];
+          const label = labels.find(
+            (node) => node.textContent.trim().startsWith(%s)
+          );
+          const field = label && label.closest('[data-testid="stNumberInput"]');
+          const input = field && field.querySelector('input');
+          return !!input && Math.abs(parseFloat(input.value) - %s) < 0.01;
+        })()
+        """ % (json.dumps(label_text), expected)
+        return bool(await self.wait_js(expression, timeout=timeout))
+
+    async def wait_for_amount(self, expected: float, timeout: float = 30.0) -> bool:
+        """Wait until the score form shows the amount from the selected preset."""
+        return await self.wait_for_number("Amount (USD)", expected, timeout=timeout)
+
+    async def click_submit(self, label: str, timeout: float = 20.0) -> bool:
+        """Click a form submit button, ignoring matching navigation labels."""
+        expression = """
+        (() => {
+          const form = document.querySelector('[data-testid="stForm"]');
+          const buttons = [...(form || document).querySelectorAll('button')];
+          const target = buttons.find(
+            (node) => node.textContent.replace(/\\s+/g, ' ').includes(%s)
+          );
+          if (!target || target.disabled) return false;
+          target.click();
+          return true;
+        })()
+        """ % json.dumps(label)
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            result = await self.cmd(
+                "Runtime.evaluate", expression=expression, returnByValue=True
+            )
+            if result.get("result", {}).get("value"):
+                return True
+            await asyncio.sleep(0.5)
+        return False
+
+    async def button_enabled(self, label: str, timeout: float = 30.0) -> bool:
+        expression = """
+        (() => {
+          const buttons = [...document.querySelectorAll('button')];
+          const target = buttons.find(
+            (node) => node.textContent.replace(/\\s+/g, ' ').includes(%s)
+          );
+          return !!target && !target.disabled;
+        })()
+        """ % json.dumps(label)
+        return bool(
+            await self.wait_js(expression, timeout=timeout)
+        )
+
+    async def upload_file(
+        self, path: Path, selector: str = "input[type=file]", timeout: float = 30.0
+    ) -> bool:
+        await self.cmd("DOM.enable")
+        deadline = time.time() + timeout
+        while time.time() < deadline:
+            document = await self.cmd("DOM.getDocument", depth=1)
+            node = await self.cmd(
+                "DOM.querySelector",
+                nodeId=document["root"]["nodeId"],
+                selector=selector,
+            )
+            if node.get("nodeId"):
+                await self.cmd(
+                    "DOM.setFileInputFiles", files=[str(path)], nodeId=node["nodeId"]
+                )
                 return True
             await asyncio.sleep(0.5)
         return False
@@ -298,51 +530,106 @@ async def capture_pages(base_url: str, out_dir: Path, chrome_path: str) -> list[
         page_target = next(item for item in targets if item["type"] == "page")
 
         saved: list[Path] = []
-        async with Chrome(page_target["webSocketDebuggerUrl"]) as chrome:
-            for slug, path, actions, label in PAGES:
-                print(f"capturing {label} ...")
-                await chrome.go(f"{base_url}{path}", settle=4.0)
-                for action in actions:
-                    clicked = await chrome.click(action)
-                    print(f"  {action!r}: {'clicked' if clicked else 'button not found'}")
+        demo_cheque = make_demo_cheque(out_dir / "_cheque_sample.jpg")
+        try:
+            async with Chrome(page_target["webSocketDebuggerUrl"]) as chrome:
+                for slug, path, actions, label in PAGES:
+                    print(f"capturing {label} ...")
+
+                    # Second view of Model performance focused on the
+                    # threshold-policy cards below the fold.
+                    if slug == "performance-policy":
+                        await chrome.go(f"{base_url}/performance", settle=9.0)
+                        await chrome.wait_js(
+                            "document.body.innerText.includes('Threshold policy simulation')",
+                            timeout=30,
+                        )
+                        await chrome.scroll_to(
+                            "Threshold policy simulation", offset=-100
+                        )
+                        await asyncio.sleep(2.0)
+                        target = out_dir / "performance-policy.png"
+                        await chrome.screenshot(target)
+                        saved.append(target)
+                        continue
+
+                    await chrome.go(f"{base_url}{path}", settle=4.0)
+                    if slug == "cheque":
+                        uploaded = await chrome.upload_file(demo_cheque)
+                        print(f"  upload cheque: {'ok' if uploaded else 'input not found'}")
+                        if uploaded:
+                            enabled = await chrome.button_enabled("Analyse cheque")
+                            if enabled:
+                                await chrome.click("Analyse cheque")
+                            await chrome.wait_js(
+                                "document.body.innerText.includes('Reason codes')",
+                                timeout=45,
+                            )
+                    else:
+                        for action in actions:
+                            # Presets rerun the app; submit only after the widgets
+                            # show the preset values so the frames capture the
+                            # high-risk cases instead of the initial defaults.
+                            if slug in {"score", "agents"} and action in {
+                                "Score transaction",
+                                "Run agents",
+                            }:
+                                continue
+                            clicked = await chrome.click(action)
+                            print(
+                                f"  {action!r}: "
+                                f"{'clicked' if clicked else 'button not found'}"
+                            )
+                            await asyncio.sleep(2.0)
+                        if slug == "score":
+                            applied = await chrome.wait_for_amount(950.0)
+                            # Let the preset rerun finish before submitting the form.
+                            await asyncio.sleep(1.5)
+                            submitted = await chrome.click_submit("Score transaction")
+                            print(
+                                f"  preset applied: {'ok' if applied else 'timeout'}; "
+                                f"submit: {'clicked' if submitted else 'button not found'}"
+                            )
+                            await chrome.wait_js(
+                                "document.body.innerText.includes('Analyst reason codes')",
+                                timeout=45,
+                            )
+                        if slug == "agents":
+                            applied = await chrome.wait_for_number("Inbound / 24h", 40.0)
+                            await asyncio.sleep(1.0)
+                            submitted = await chrome.click("Run agents")
+                            print(
+                                f"  preset applied: {'ok' if applied else 'timeout'}; "
+                                f"submit: {'clicked' if submitted else 'button not found'}"
+                            )
+
+                    if slug == "agents":
+                        await chrome.wait_js(
+                            "document.body.innerText.includes('Fused risk')",
+                            timeout=45,
+                        )
+                        await chrome.scroll_to("Fused risk", offset=-130)
+                        await asyncio.sleep(1.5)
+                    if slug == "federated":
+                        await chrome.wait_js(
+                            "document.body.innerText.includes('Privacy controls')",
+                            timeout=30,
+                        )
+                        await chrome.scroll_to("Privacy controls")
+                        await asyncio.sleep(1.5)
+
+                    # Charts render after Streamlit finishes the run; wait for an
+                    # ECharts canvas before taking the frame where one is expected.
+                    if slug in {"overview", "activity", "score", "batch", "performance", "drift"}:
+                        await chrome.wait_js(
+                            "document.querySelectorAll('canvas').length > 0", timeout=25
+                        )
                     await asyncio.sleep(2.0)
-                # Charts render after Streamlit finishes the run; wait for an
-                # ECharts canvas before taking the frame.
-                await chrome.wait_js(
-                    "document.querySelectorAll('canvas').length > 0", timeout=25
-                )
-                await asyncio.sleep(2.0)
-                target = out_dir / f"{slug}.png"
-                await chrome.screenshot(target)
-                saved.append(target)
-
-            # Second frame of Model performance showing the calibration,
-            # baseline and threshold-policy cards below the fold. Chrome does
-            # not paint content outside the viewport, so render a tall viewport
-            # and crop the lower half.
-            print("capturing Model performance (policy section) ...")
-            await chrome.cmd(
-                "Emulation.setDeviceMetricsOverride",
-                width=1600,
-                height=2400,
-                deviceScaleFactor=1,
-                mobile=False,
-            )
-            await chrome.go(f"{base_url}/performance", settle=9.0)
-            await chrome.wait_js(
-                "document.body.innerText.includes('Threshold policy simulation')",
-                timeout=30,
-            )
-            await asyncio.sleep(2.0)
-            full = out_dir / "_performance_full.png"
-            await chrome.screenshot(full)
-
-            from PIL import Image
-
-            with Image.open(full) as image:
-                image.crop((0, 1120, 1600, 2000)).save(out_dir / "performance-policy.png")
-            full.unlink(missing_ok=True)
-            saved.append(out_dir / "performance-policy.png")
+                    target = out_dir / f"{slug}.png"
+                    await chrome.screenshot(target)
+                    saved.append(target)
+        finally:
+            demo_cheque.unlink(missing_ok=True)
         return saved
     finally:
         browser.terminate()
@@ -413,6 +700,11 @@ def main() -> None:
     parser.add_argument("--video", default="docs/demo.mp4")
     parser.add_argument("--traffic", type=int, default=160)
     parser.add_argument("--skip-traffic", action="store_true")
+    parser.add_argument(
+        "--reuse-existing",
+        action="store_true",
+        help="Capture against an already running API/dashboard instead of failing",
+    )
     args = parser.parse_args()
 
     os.chdir(ROOT)
@@ -420,10 +712,11 @@ def main() -> None:
     out_dir.mkdir(parents=True, exist_ok=True)
 
     chrome_path = find_chrome()
-    started = start_stack(args.api_url, args.app_url)
+    started = start_stack(args.api_url, args.app_url, reuse=args.reuse_existing)
     try:
         if not args.skip_traffic:
             generate_traffic(args.api_url, args.traffic)
+            warm_online_learner(args.api_url)
         frames = asyncio.run(capture_pages(args.app_url, out_dir, chrome_path))
     finally:
         stop_stack(started)
