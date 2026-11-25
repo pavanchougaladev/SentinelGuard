@@ -31,20 +31,28 @@ from dashboard_data import (  # noqa: E402
     MODEL_SCHEMAS,
     PSI_ALERT,
     PSI_WARN,
+    analyze_agents,
+    analyze_cheque_image,
     api_health,
     artifact_age,
     batch_template,
+    bootstrap_online,
     clear_prediction_cache,
     dataset_mode,
     detect_upload_schema,
     drift_rows,
+    fetch_agent_catalog,
     fetch_drift,
+    fetch_federated_status,
+    fetch_online_status,
     load_eval_analytics,
     load_metrics,
     load_policy,
     load_predictions,
     load_reference,
     load_traffic_sample,
+    online_learn,
+    online_predict,
     policy_rows,
     prepare_upload,
     row_to_payload,
@@ -145,6 +153,104 @@ SYNTH_PRESETS: dict[str, dict[str, Any]] = {
         "ip_risk": 0.90,
         "account_age_days": 3,
         "tx_count_24h": 18,
+    },
+}
+
+# Presets populate the agent form widgets by key; each entry must cover every
+# key so switching between cases does not leak values from the previous one.
+AGENT_PRESETS: dict[str, dict[str, Any]] = {
+    "High-risk mule": {
+        "amount": 9_400.0,
+        "tx_type": "transfer",
+        "mcc": "crypto",
+        "country": "RU",
+        "device": 0.92,
+        "ip": 0.88,
+        "age": 4,
+        "velocity": 34,
+        "kyc": "failed",
+        "mismatch": True,
+        "device_accounts": 18,
+        "email_accounts": 12,
+        "sanctions": False,
+        "pep": False,
+        "geo": True,
+        "synthetic": 0.86,
+        "document": 0.74,
+        "inbound": 40,
+        "outbound": 38,
+        "senders": 31,
+        "receivers": 24,
+        "pass": 0.94,
+        "dormant": 120,
+        "round": 0.82,
+        "shared": 9,
+        "beneficiary": 0.90,
+        "avg_outbound": 9_000.0,
+        "near": 0.65,
+        "threshold": 0.55,
+    },
+    "Synthetic identity": {
+        "amount": 1_250.0,
+        "tx_type": "online",
+        "mcc": "electronics",
+        "country": "NG",
+        "device": 0.72,
+        "ip": 0.64,
+        "age": 2,
+        "velocity": 11,
+        "kyc": "review",
+        "mismatch": True,
+        "device_accounts": 14,
+        "email_accounts": 19,
+        "sanctions": False,
+        "pep": True,
+        "geo": True,
+        "synthetic": 0.94,
+        "document": 0.88,
+        "inbound": 3,
+        "outbound": 6,
+        "senders": 3,
+        "receivers": 5,
+        "pass": 0.35,
+        "dormant": 14,
+        "round": 0.40,
+        "shared": 6,
+        "beneficiary": 0.55,
+        "avg_outbound": 1_100.0,
+        "near": 0.20,
+        "threshold": 0.55,
+    },
+    "Clear case": {
+        "amount": 2_400.0,
+        "tx_type": "purchase",
+        "mcc": "travel",
+        "country": "IN",
+        "device": 0.10,
+        "ip": 0.08,
+        "age": 1_200,
+        "velocity": 2,
+        "kyc": "verified",
+        "mismatch": False,
+        "device_accounts": 1,
+        "email_accounts": 1,
+        "sanctions": False,
+        "pep": False,
+        "geo": False,
+        "synthetic": 0.0,
+        "document": 0.0,
+        "inbound": 2,
+        "outbound": 1,
+        "senders": 2,
+        "receivers": 1,
+        "pass": 0.05,
+        "dormant": 0,
+        "round": 0.0,
+        "shared": 1,
+        "beneficiary": 0.05,
+        "avg_outbound": 2_400.0,
+        "near": 0.0,
+        "threshold": 0.55,
     },
 }
 
@@ -513,7 +619,7 @@ def shap_option(reasons: list[dict[str, Any]]) -> dict[str, Any]:
 def psi_option(rows: list[dict[str, Any]]) -> dict[str, Any]:
     ordered = list(reversed(rows))
     return {
-        "grid": {"left": 8, "right": 34, "top": 10, "bottom": 10, "containLabel": True},
+        "grid": {"left": 8, "right": 34, "top": 34, "bottom": 10, "containLabel": True},
         "tooltip": {"trigger": "axis", "axisPointer": {"type": "shadow"}, "valueFormatter": "%.4f"},
         "xAxis": {"type": "value", "name": "PSI"},
         "yAxis": {
@@ -889,6 +995,20 @@ def _render_presets(presets: dict[str, dict[str, Any]]) -> None:
         for name, preset in presets.items():
             if st.button(name, type="tertiary", key=f"preset_{name}"):
                 _apply_preset(preset)
+
+
+def _apply_agent_preset(preset: dict[str, Any]) -> None:
+    for key, value in preset.items():
+        st.session_state[f"agent_{key}"] = value
+    st.rerun()
+
+
+def _render_agent_presets() -> None:
+    with st.container(horizontal=True):
+        st.caption("Quick cases")
+        for name, preset in AGENT_PRESETS.items():
+            if st.button(name, type="tertiary", key=f"agent_preset_{name}"):
+                _apply_agent_preset(preset)
 
 
 def _render_score_result(result: dict[str, Any] | None) -> None:
@@ -2350,6 +2470,679 @@ def activity_page() -> None:
 
 
 # ---------------------------------------------------------------------------
+# Advanced capability pages
+# ---------------------------------------------------------------------------
+
+
+def agents_page() -> None:
+    page_header(
+        "Agent console",
+        "Transaction, identity, and mule-account agents evaluate one case and "
+        "fuse their findings into a single decision.",
+        ":material/hub:",
+    )
+
+    online, _ = api_health()
+    if not online:
+        st.warning(
+            f"The scoring API at {API_URL} is offline, so agents cannot run.",
+            title="Scoring API unavailable",
+            icon=":material/cloud_off:",
+        )
+
+    catalog, catalog_error = fetch_agent_catalog()
+    if catalog_error:
+        st.info(catalog_error)
+    elif catalog:
+        with st.container(border=True):
+            st.markdown("**Specialist agents**")
+            cols = st.columns(len(catalog.get("agents", [])) or 1)
+            for index, agent in enumerate(catalog.get("agents", [])):
+                with cols[index % len(cols)]:
+                    st.markdown(f"**{agent['display_name']}**")
+                    st.caption(agent["description"])
+                    st.caption(
+                        f"Fraud type `{agent['fraud_type']}` · weight "
+                        f"{agent['default_weight']:.0%}"
+                    )
+
+    _render_agent_presets()
+    st.space("small")
+
+    with st.form("agent_case_form"):
+        st.markdown("**Payment**")
+        tx1, tx2, tx3, tx4 = st.columns(4)
+        with tx1:
+            amount = st.number_input(
+                "Amount (USD)", min_value=0.01, max_value=1_000_000.0,
+                value=2_400.0, step=50.0, key="agent_amount",
+            )
+            tx_type = st.selectbox("Type", TYPES, key="agent_tx_type")
+        with tx2:
+            merchant = st.selectbox("Merchant", MCC, key="agent_mcc")
+            country = st.selectbox("Country", COUNTRIES, key="agent_country")
+        with tx3:
+            device_risk = st.slider("Device risk", 0.0, 1.0, 0.2, 0.01, key="agent_device")
+            ip_risk = st.slider("IP risk", 0.0, 1.0, 0.2, 0.01, key="agent_ip")
+        with tx4:
+            account_age = st.number_input(
+                "Account age (days)", min_value=0, max_value=50_000,
+                value=180, step=1, key="agent_age",
+            )
+            velocity = st.number_input(
+                "Transactions / 24h", min_value=0, max_value=100_000,
+                value=2, step=1, key="agent_velocity",
+            )
+
+        st.markdown("**Identity signals**")
+        id1, id2, id3, id4 = st.columns(4)
+        with id1:
+            kyc = st.selectbox(
+                "KYC status", ["verified", "pending", "review", "failed", "unknown"],
+                key="agent_kyc",
+            )
+            identity_mismatch = st.checkbox("Identity mismatch", key="agent_mismatch")
+        with id2:
+            device_accounts = st.number_input(
+                "Accounts on device (7d)", min_value=0, max_value=10_000,
+                value=1, key="agent_device_accounts",
+            )
+            email_accounts = st.number_input(
+                "Accounts on email (7d)", min_value=0, max_value=10_000,
+                value=1, key="agent_email_accounts",
+            )
+        with id3:
+            sanctions = st.checkbox("Sanctions hit", key="agent_sanctions")
+            pep = st.checkbox("PEP hit", key="agent_pep")
+            geo_mismatch = st.checkbox("IP country mismatch", key="agent_geo")
+        with id4:
+            synthetic = st.slider(
+                "Synthetic-identity score", 0.0, 1.0, 0.0, 0.01, key="agent_synthetic"
+            )
+            document_tamper = st.slider(
+                "Document tamper score", 0.0, 1.0, 0.0, 0.01, key="agent_document"
+            )
+
+        st.markdown("**Mule-account signals**")
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            inbound = st.number_input(
+                "Inbound / 24h", min_value=0, max_value=100_000, value=0,
+                key="agent_inbound",
+            )
+            outbound = st.number_input(
+                "Outbound / 24h", min_value=0, max_value=100_000, value=0,
+                key="agent_outbound",
+            )
+            senders = st.number_input(
+                "Unique senders (7d)", min_value=0, max_value=100_000, value=0,
+                key="agent_senders",
+            )
+        with m2:
+            receivers = st.number_input(
+                "Unique receivers (7d)", min_value=0, max_value=100_000, value=0,
+                key="agent_receivers",
+            )
+            pass_through = st.slider(
+                "Pass-through ratio", 0.0, 1.0, 0.0, 0.01, key="agent_pass"
+            )
+            dormant = st.number_input(
+                "Dormant days before activity", min_value=0, max_value=100_000,
+                value=0, key="agent_dormant",
+            )
+        with m3:
+            round_ratio = st.slider(
+                "Round-amount ratio", 0.0, 1.0, 0.0, 0.01, key="agent_round"
+            )
+            shared_devices = st.number_input(
+                "Shared-device accounts", min_value=0, max_value=10_000,
+                value=1, key="agent_shared",
+            )
+            beneficiary_risk = st.slider(
+                "Beneficiary risk", 0.0, 1.0, 0.0, 0.01, key="agent_beneficiary"
+            )
+        with m4:
+            avg_outbound = st.number_input(
+                "Average outbound amount", min_value=0.0, max_value=1_000_000.0,
+                value=0.0, step=50.0, key="agent_avg_outbound",
+            )
+            near_threshold = st.slider(
+                "Near-threshold ratio", 0.0, 1.0, 0.0, 0.01, key="agent_near"
+            )
+            threshold = st.slider(
+                "Decision threshold", 0.05, 0.95, 0.55, 0.01, key="agent_threshold"
+            )
+
+        submitted = st.form_submit_button(
+            ":material/hub: Run agents", type="primary", width="stretch"
+        )
+
+    if submitted:
+        payload = {
+            "transaction": {
+                "amount": amount,
+                "tx_type": tx_type,
+                "merchant_category": merchant,
+                "country": country,
+                "device_risk": device_risk,
+                "ip_risk": ip_risk,
+                "account_age_days": int(account_age),
+                "tx_count_24h": int(velocity),
+            },
+            "identity": {
+                "kyc_status": kyc,
+                "identity_mismatch": identity_mismatch,
+                "device_accounts_7d": int(device_accounts),
+                "email_accounts_7d": int(email_accounts),
+                "ip_country_mismatch": geo_mismatch,
+                "sanctions_hit": sanctions,
+                "pep_hit": pep,
+                "synthetic_identity_score": synthetic,
+                "document_tamper_score": document_tamper,
+                "account_age_days": int(account_age),
+            },
+            "mule": {
+                "inbound_count_24h": int(inbound),
+                "outbound_count_24h": int(outbound),
+                "unique_senders_7d": int(senders),
+                "unique_receivers_7d": int(receivers),
+                "pass_through_ratio": pass_through,
+                "dormant_days_before_activity": int(dormant),
+                "round_amount_ratio": round_ratio,
+                "shared_device_accounts": int(shared_devices),
+                "beneficiary_risk": beneficiary_risk,
+                "avg_outbound_amount": avg_outbound,
+                "near_threshold_ratio": near_threshold,
+                "account_age_days": int(account_age),
+                "tx_count_24h": int(velocity),
+            },
+            "threshold": threshold,
+            "include_model_score": True,
+            "include_online_score": True,
+        }
+        result, error = analyze_agents(payload)
+        if error:
+            st.error(error)
+        else:
+            st.session_state["_agent_result"] = result
+
+    result = st.session_state.get("_agent_result")
+    if not result:
+        empty_card(
+            "No case analysed yet",
+            "Fill in the payment, identity, and mule signals, then run the agents.",
+        )
+        return
+
+    st.divider()
+    top1, top2, top3, top4 = st.columns(4)
+    top1.metric("Fused risk", f"{result['overall_risk']:.0%}", result["band"])
+    top2.metric("Decision", result["decision"])
+    top3.metric("Primary fraud type", result["primary_fraud_type"].replace("_", " ").title())
+    top4.metric("Agreement", f"{result['consensus']['agreement']:.0%}")
+
+    st.info(result["narrative"], icon=":material/insights:")
+
+    st.markdown("**Agent findings**")
+    for agent in result["agents"]:
+        with st.expander(
+            f"{agent['display_name']} · {agent['risk']:.0%} · {agent['status'].title()}",
+            expanded=agent["risk"] >= 0.5,
+        ):
+            if agent.get("error"):
+                st.error(f"Agent error: {agent['error']}")
+                continue
+            a1, a2 = st.columns([0.35, 0.65])
+            with a1:
+                st.metric("Risk", f"{agent['risk']:.0%}")
+                st.metric("Confidence", f"{agent['confidence']:.0%}")
+            with a2:
+                if agent["reasons"]:
+                    for reason in agent["reasons"][:8]:
+                        st.markdown(
+                            f"- **{reason['code']}** — {reason['label']} "
+                            f"(`+{reason['weight']:.2f}`)"
+                        )
+                else:
+                    st.caption("No rule or model signal crossed a threshold.")
+            if agent["actions"]:
+                st.caption("Recommended actions")
+                for action in agent["actions"][:4]:
+                    st.markdown(f"- {action}")
+
+    left, right = st.columns(2, gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("**Typologies**")
+            if result["typologies"]:
+                st.write(", ".join(f"`{code}`" for code in result["typologies"]))
+            else:
+                st.caption("No typology attributed.")
+    with right:
+        with st.container(border=True):
+            st.markdown("**Recommended next actions**")
+            for action in result["recommended_actions"]:
+                st.markdown(f"- {action}")
+    st.caption(
+        f"Latency {result['latency_ms']:.0f} ms · schema `{result['schema']}` · "
+        f"threshold {result['threshold']:.0%}"
+    )
+
+
+def cheque_page() -> None:
+    page_header(
+        "Cheque vision",
+        "AWS Bedrock VLM reads the cheque; deterministic image forensics and "
+        "expected-field checks make the risk score auditable.",
+        ":material/document_scanner:",
+    )
+
+    online, _ = api_health()
+    if not online:
+        st.warning(
+            f"The scoring API at {API_URL} is offline, so cheques cannot be analysed.",
+            title="Scoring API unavailable",
+            icon=":material/cloud_off:",
+        )
+
+    left, right = st.columns([0.48, 0.52], gap="large")
+    with left:
+        with st.container(border=True):
+            st.markdown("**Cheque image**")
+            uploaded = st.file_uploader(
+                "Upload a cheque photo or scan",
+                type=["png", "jpg", "jpeg", "webp", "gif"],
+                help="Up to 8 MB. Only the SHA-256 digest is written to the audit log.",
+            )
+            if uploaded is not None:
+                st.image(uploaded, caption="Uploaded cheque", width="stretch")
+            st.markdown("**Expected values**")
+            e1, e2 = st.columns(2)
+            with e1:
+                expected_amount = st.number_input(
+                    "Expected amount (USD)", min_value=0.0, max_value=10_000_000.0,
+                    value=0.0, step=50.0, key="cheque_amount",
+                )
+                expected_payee = st.text_input("Expected payee", key="cheque_payee")
+            with e2:
+                account_last4 = st.text_input(
+                    "Account last four", max_chars=4, key="cheque_last4"
+                )
+                expected_date = st.text_input(
+                    "Expected date (YYYY-MM-DD)", key="cheque_date"
+                )
+            backend = st.selectbox(
+                "VLM backend",
+                ["auto", "bedrock", "heuristic"],
+                help=(
+                    "auto uses Bedrock when AWS credentials exist and falls back to "
+                    "heuristic review; heuristic skips the model entirely."
+                ),
+                key="cheque_backend",
+            )
+            analyse = st.button(
+                ":material/document_scanner: Analyse cheque",
+                type="primary",
+                width="stretch",
+                disabled=uploaded is None,
+            )
+
+        st.caption(
+            "Full account numbers are never requested. Low-confidence or fallback "
+            "results are routed to manual review."
+        )
+
+    with right:
+        if analyse and uploaded is not None:
+            raw = uploaded.getvalue()
+            result, error = analyze_cheque_image(
+                raw,
+                filename=uploaded.name,
+                content_type=uploaded.type or "image/png",
+                expected_amount=expected_amount or None,
+                expected_payee=expected_payee or None,
+                account_last4=account_last4 or None,
+                expected_date=expected_date or None,
+                backend=backend,
+            )
+            if error:
+                st.error(error)
+            else:
+                st.session_state["_cheque_result"] = result
+
+        result = st.session_state.get("_cheque_result")
+        if not result:
+            empty_card(
+                "No cheque analysed yet",
+                "Upload an image and run the analysis to see the VLM assessment, "
+                "forensic flags, and field comparison.",
+                icon=":material/document_scanner:",
+            )
+            return
+
+        c1, c2, c3 = st.columns(3)
+        c1.metric("Risk", f"{result['risk_score']:.0%}", result["risk_band"])
+        c2.metric("Decision", result["decision"])
+        c3.metric("Backend", result["backend"])
+        st.caption(
+            f"Model `{result['model_id']}` · region `{result['region']}` · "
+            f"{result['latency_ms']:.0f} ms · status `{result['status']}`"
+        )
+
+        if result["warnings"]:
+            for warning in result["warnings"]:
+                st.warning(warning, icon=":material/warning:")
+
+        if result["reasoning"]:
+            st.info(result["reasoning"], icon=":material/psychology:")
+
+        with st.container(border=True):
+            st.markdown("**Extracted fields**")
+            fields = result.get("fields") or {}
+            if fields:
+                st.dataframe(
+                    pd.DataFrame(
+                        [{"Field": key.replace("_", " ").title(), "Value": str(value)}
+                         for key, value in fields.items()]
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+            else:
+                st.caption("The VLM did not return validated fields.")
+
+        with st.container(border=True):
+            st.markdown("**Reason codes**")
+            if result["reasons"]:
+                for reason in result["reasons"]:
+                    st.markdown(
+                        f"- **{reason['code']}** — {reason['label']} "
+                        f"(`+{reason['weight']:.2f}`)"
+                    )
+            else:
+                st.caption("No reasons were triggered.")
+
+        with st.expander("Image forensics"):
+            st.json(result["forensics"])
+        with st.expander("Response metadata"):
+            st.json(
+                {
+                    "image": result["image"],
+                    "backend": result["backend"],
+                    "status": result["status"],
+                    "confidence": result["confidence"],
+                }
+            )
+
+
+def adaptive_page() -> None:
+    page_header(
+        "Adaptive learning",
+        "River updates after every labelled decision, while secure federated "
+        "learning pools model updates without sharing customer rows.",
+        ":material/model_training:",
+    )
+
+    online_tab, federated_tab = st.tabs(
+        [":material/online_prediction: Online learner", ":material/hub: Federated training"]
+    )
+
+    with online_tab:
+        status, error = fetch_online_status()
+        if error:
+            st.error(error)
+        elif status:
+            if not status.get("available"):
+                st.warning(
+                    "River is not installed on the API host. Install requirements "
+                    "to enable online learning.",
+                    icon=":material/extension_off:",
+                )
+            m1, m2, m3, m4 = st.columns(4)
+            m1.metric("Samples seen", f"{status['samples_seen']:,}")
+            m2.metric("Adaptive threshold", f"{status['threshold']:.1%}")
+            m3.metric("Drift events", status["drift"]["events"])
+            m4.metric(
+                "Rolling F1",
+                (
+                    f"{status['rolling']['f1']:.2f}"
+                    if status["rolling"]["f1"] is not None
+                    else "—"
+                ),
+            )
+            if not status.get("warm"):
+                st.info(
+                    f"The learner warms up after 50 samples; it has seen "
+                    f"{status['samples_seen']}. Run the bootstrap step below."
+                )
+            rolling = status["rolling"]
+            if rolling["n"]:
+                st.caption(
+                    f"Rolling window {rolling['n']:,} labelled decisions · "
+                    f"precision {rolling['precision']:.2f} · "
+                    f"recall {rolling['recall']:.2f} · "
+                    f"ROC-AUC {rolling['roc_auc'] if rolling['roc_auc'] is not None else '—'} · "
+                    f"PR-AUC {rolling['pr_auc'] if rolling['pr_auc'] is not None else '—'}"
+                )
+            with st.expander("Threshold history and last update"):
+                st.line_chart(
+                    pd.DataFrame(
+                        {"threshold": status.get("threshold_history") or []}
+                    )
+                )
+                if status.get("last_event"):
+                    st.json(status["last_event"])
+
+            st.divider()
+            b1, b2 = st.columns([0.4, 0.6], vertical_alignment="bottom")
+            with b1:
+                rows = st.number_input(
+                    "Bootstrap rows", min_value=100, max_value=50_000,
+                    value=3_000, step=500, key="online_rows",
+                )
+            with b2:
+                if st.button(
+                    ":material/play_arrow: Bootstrap / reset learner",
+                    width="stretch",
+                ):
+                    with st.spinner("Warming the online learner…"):
+                        _, bootstrap_error = bootstrap_online(int(rows), reset=True)
+                    if bootstrap_error:
+                        st.error(bootstrap_error)
+                    else:
+                        st.success(f"Bootstrapped {int(rows):,} rows.")
+                        st.rerun()
+
+            st.divider()
+            pcol, lcol = st.columns(2, gap="large")
+            with pcol:
+                with st.container(border=True):
+                    st.markdown("**Score a transaction online**")
+                    with st.form("online_predict_form", border=False):
+                        o_amount = st.number_input(
+                            "Amount (USD)", min_value=0.01, max_value=1_000_000.0,
+                            value=850.0, step=10.0, key="online_amount",
+                        )
+                        o_type = st.selectbox("Type", TYPES, key="online_tx_type")
+                        o_mcc = st.selectbox("Merchant", MCC, key="online_mcc")
+                        o_country = st.selectbox("Country", COUNTRIES, key="online_country")
+                        o_device = st.slider("Device risk", 0.0, 1.0, 0.2, 0.01, key="online_device")
+                        o_ip = st.slider("IP risk", 0.0, 1.0, 0.2, 0.01, key="online_ip")
+                        o_age = st.number_input(
+                            "Account age (days)", min_value=0, max_value=50_000,
+                            value=365, key="online_age",
+                        )
+                        o_velocity = st.number_input(
+                            "Transactions / 24h", min_value=0, max_value=100_000,
+                            value=2, key="online_velocity",
+                        )
+                        o_submit = st.form_submit_button(
+                            ":material/bolt: Score online", width="stretch"
+                        )
+                    if o_submit:
+                        prediction, predict_error = online_predict(
+                            {
+                                "amount": o_amount,
+                                "tx_type": o_type,
+                                "merchant_category": o_mcc,
+                                "country": o_country,
+                                "device_risk": o_device,
+                                "ip_risk": o_ip,
+                                "account_age_days": int(o_age),
+                                "tx_count_24h": int(o_velocity),
+                            }
+                        )
+                        if predict_error:
+                            st.error(predict_error)
+                        else:
+                            st.metric(
+                                "Online score", f"{prediction['online_score']:.1%}",
+                                prediction["decision"],
+                            )
+                            st.caption(
+                                f"Threshold {prediction['threshold']:.1%} · "
+                                f"samples {prediction['samples_seen']:,}"
+                            )
+
+            with lcol:
+                with st.container(border=True):
+                    st.markdown("**Feed a labelled outcome**")
+                    st.caption(
+                        "The learner updates after every label, so new fraud "
+                        "patterns are absorbed without a full retrain."
+                    )
+                    with st.form("online_learn_form", border=False):
+                        label = st.radio(
+                            "Outcome", [1, 0],
+                            format_func=lambda value: "Fraud" if value == 1 else "Legitimate",
+                            horizontal=True, key="online_label",
+                        )
+                        l_amount = st.number_input(
+                            "Amount (USD)", min_value=0.01, max_value=1_000_000.0,
+                            value=850.0, step=10.0, key="learn_amount",
+                        )
+                        l_type = st.selectbox("Type", TYPES, key="learn_tx_type")
+                        l_mcc = st.selectbox("Merchant", MCC, key="learn_mcc")
+                        l_country = st.selectbox("Country", COUNTRIES, key="learn_country")
+                        l_device = st.slider("Device risk", 0.0, 1.0, 0.2, 0.01, key="learn_device")
+                        l_ip = st.slider("IP risk", 0.0, 1.0, 0.2, 0.01, key="learn_ip")
+                        l_age = st.number_input(
+                            "Account age (days)", min_value=0, max_value=50_000,
+                            value=365, key="learn_age",
+                        )
+                        l_velocity = st.number_input(
+                            "Transactions / 24h", min_value=0, max_value=100_000,
+                            value=2, key="learn_velocity",
+                        )
+                        l_submit = st.form_submit_button(
+                            ":material/school: Learn this outcome", width="stretch"
+                        )
+                    if l_submit:
+                        outcome, learn_error = online_learn(
+                            {
+                                "amount": l_amount,
+                                "tx_type": l_type,
+                                "merchant_category": l_mcc,
+                                "country": l_country,
+                                "device_risk": l_device,
+                                "ip_risk": l_ip,
+                                "account_age_days": int(l_age),
+                                "tx_count_24h": int(l_velocity),
+                            },
+                            int(label),
+                        )
+                        if learn_error:
+                            st.error(learn_error)
+                        else:
+                            event = outcome["event"]
+                            st.success(
+                                f"Learned sample #{event['samples_seen']:,} · "
+                                f"score {event['score_before']:.1%} → "
+                                f"{event['score_after']:.1%}"
+                            )
+                            if event.get("drift_detected"):
+                                st.warning(
+                                    "ADWIN detected drift on this update; the "
+                                    "adaptive threshold will retune.",
+                                    icon=":material/sensors:",
+                                )
+
+    with federated_tab:
+        report, report_error = fetch_federated_status()
+        if report_error:
+            st.error(report_error)
+        elif not report or not report.get("available"):
+            empty_card(
+                "No federated report yet",
+                "Train a federated model to populate this view.",
+                icon=":material/hub:",
+            )
+            st.code(
+                "python -m src.federated --demo --clients 5 --rounds 5",
+                language="bash",
+            )
+        else:
+            metrics = report.get("final_metrics", {})
+            f1, f2, f3, f4 = st.columns(4)
+            f1.metric("PR-AUC", f"{metrics.get('pr_auc', 0):.3f}")
+            f2.metric("ROC-AUC", f"{metrics.get('roc_auc', 0):.3f}")
+            f3.metric("Recall", f"{metrics.get('recall', 0):.1%}")
+            f4.metric("Precision", f"{metrics.get('precision', 0):.1%}")
+            st.caption(
+                f"{report.get('algorithm')} · {report.get('client_count')} institutions · "
+                f"{report.get('total_samples', 0):,} private rows · "
+                f"best round {report.get('best_round')} · "
+                f"generated {report.get('generated_at')}"
+            )
+
+            privacy = report.get("privacy", {})
+            st.markdown("**Privacy controls**")
+            p1, p2, p3 = st.columns(3)
+            p1.metric(
+                "Secure aggregation",
+                "On" if privacy.get("secure_aggregation") else "Off",
+            )
+            p2.metric(
+                "Raw rows shared",
+                "No" if not privacy.get("raw_rows_shared") else "Yes",
+            )
+            dp = privacy.get("dp", {})
+            p3.metric(
+                "Differential privacy",
+                f"ε≈{dp.get('epsilon_total_estimate', 0):.1f}" if dp.get("enabled") else "Off",
+            )
+            for note in privacy.get("notes", []):
+                st.caption(f"- {note}")
+
+            rounds = report.get("rounds", [])
+            if rounds:
+                st.markdown("**Rounds**")
+                st.dataframe(
+                    pd.DataFrame(
+                        [
+                            {
+                                "Round": item["round"],
+                                "Clients": item["clients_participating"],
+                                "Samples": item["samples"],
+                                "PR-AUC": item["metrics"]["pr_auc"],
+                                "ROC-AUC": item["metrics"]["roc_auc"],
+                                "Recall": item["metrics"]["recall"],
+                                "Mean update norm": item["mean_update_norm"],
+                            }
+                            for item in rounds
+                        ]
+                    ),
+                    hide_index=True,
+                    width="stretch",
+                )
+
+            clients = report.get("clients", [])
+            if clients:
+                with st.expander("Participating institutions"):
+                    st.dataframe(pd.DataFrame(clients), hide_index=True, width="stretch")
+
+
+# ---------------------------------------------------------------------------
 # Navigation
 # ---------------------------------------------------------------------------
 
@@ -2391,6 +3184,24 @@ PAGES = {
         title="Drift monitor",
         icon=":material/sensors:",
         url_path="drift",
+    ),
+    "agents": st.Page(
+        agents_page,
+        title="Agent console",
+        icon=":material/hub:",
+        url_path="agents",
+    ),
+    "cheque": st.Page(
+        cheque_page,
+        title="Cheque vision",
+        icon=":material/document_scanner:",
+        url_path="cheque",
+    ),
+    "adaptive": st.Page(
+        adaptive_page,
+        title="Adaptive learning",
+        icon=":material/model_training:",
+        url_path="adaptive",
     ),
 }
 
@@ -2444,8 +3255,8 @@ def main() -> None:
     navigation = st.navigation(
         {
             "Monitor": [PAGES["overview"], PAGES["activity"]],
-            "Decide": [PAGES["score"], PAGES["batch"]],
-            "Govern": [PAGES["performance"], PAGES["drift"]],
+            "Decide": [PAGES["score"], PAGES["batch"], PAGES["agents"], PAGES["cheque"]],
+            "Govern": [PAGES["performance"], PAGES["drift"], PAGES["adaptive"]],
         }
     )
     render_sidebar()

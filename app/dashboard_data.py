@@ -422,6 +422,145 @@ def fetch_drift(
 
 
 # ---------------------------------------------------------------------------
+# Advanced capability clients: agents, cheque VLM, online learning, federation
+# ---------------------------------------------------------------------------
+
+
+def _api_get(path: str, *, timeout: float = 20) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        response = requests.get(f"{API_URL}{path}", timeout=timeout)
+    except requests.RequestException as exc:
+        return None, (
+            f"Could not reach {API_URL}{path} ({type(exc).__name__}). "
+            "Start the API with `uvicorn api.main:app --port 8000`."
+        )
+    if not response.ok:
+        detail = response.text[:300].strip() or f"HTTP {response.status_code}"
+        return None, f"The API returned an error: {detail}"
+    try:
+        return response.json(), None
+    except ValueError:
+        return None, "The API returned invalid JSON."
+
+
+def _api_post(
+    path: str,
+    payload: dict[str, Any] | None = None,
+    *,
+    timeout: float = 30,
+) -> tuple[dict[str, Any] | None, str | None]:
+    try:
+        response = requests.post(f"{API_URL}{path}", json=payload, timeout=timeout)
+    except requests.RequestException as exc:
+        return None, (
+            f"Could not reach {API_URL}{path} ({type(exc).__name__}). "
+            "Start the API with `uvicorn api.main:app --port 8000`."
+        )
+    if not response.ok:
+        detail = response.text[:300].strip() or f"HTTP {response.status_code}"
+        return None, f"The API returned an error: {detail}"
+    try:
+        return response.json(), None
+    except ValueError:
+        return None, "The API returned invalid JSON."
+
+
+def fetch_agent_catalog() -> tuple[dict[str, Any] | None, str | None]:
+    """Catalog of specialist agents and their fusion weights."""
+    return _api_get("/agents/catalog")
+
+
+def analyze_agents(
+    payload: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Run the transaction, identity, and mule-account agents on one case."""
+    return _api_post("/agents/analyze", payload, timeout=30)
+
+
+def analyze_cheque_image(
+    image_bytes: bytes,
+    *,
+    filename: str = "cheque.png",
+    content_type: str = "image/png",
+    expected_amount: float | None = None,
+    expected_payee: str | None = None,
+    account_last4: str | None = None,
+    expected_date: str | None = None,
+    backend: str | None = None,
+) -> tuple[dict[str, Any] | None, str | None]:
+    """Upload a cheque image to the Bedrock VLM endpoint."""
+    data: dict[str, Any] = {}
+    if expected_amount is not None:
+        data["expected_amount"] = str(expected_amount)
+    if expected_payee:
+        data["expected_payee"] = expected_payee
+    if account_last4:
+        data["account_last4"] = account_last4
+    if expected_date:
+        data["expected_date"] = expected_date
+    if backend:
+        data["backend"] = backend
+    try:
+        response = requests.post(
+            f"{API_URL}/cheque/analyze",
+            files={"file": (filename, image_bytes, content_type)},
+            data=data,
+            timeout=90,
+        )
+    except requests.RequestException as exc:
+        return None, (
+            f"Could not reach {API_URL}/cheque/analyze ({type(exc).__name__})."
+        )
+    if not response.ok:
+        detail = response.text[:300].strip() or f"HTTP {response.status_code}"
+        return None, f"The cheque endpoint returned an error: {detail}"
+    try:
+        return response.json(), None
+    except ValueError:
+        return None, "The cheque endpoint returned invalid JSON."
+
+
+def fetch_online_status() -> tuple[dict[str, Any] | None, str | None]:
+    """River learner state, rolling metrics, adaptive threshold, and drift."""
+    return _api_get("/online/status")
+
+
+def online_predict(
+    transaction: dict[str, Any],
+) -> tuple[dict[str, Any] | None, str | None]:
+    return _api_post("/online/predict", {"transaction": transaction}, timeout=20)
+
+
+def online_learn(
+    transaction: dict[str, Any],
+    label: int,
+) -> tuple[dict[str, Any] | None, str | None]:
+    return _api_post(
+        "/online/learn",
+        {"transaction": transaction, "label": int(label)},
+        timeout=20,
+    )
+
+
+def bootstrap_online(
+    rows: int = 3000,
+    *,
+    reset: bool = True,
+) -> tuple[dict[str, Any] | None, str | None]:
+    return _api_post(
+        "/online/bootstrap",
+        {"rows": int(rows), "reset": bool(reset)},
+        timeout=180,
+    )
+
+
+def fetch_federated_status() -> tuple[dict[str, Any] | None, str | None]:
+    """Latest secure-aggregation training report."""
+    return _api_get("/federated/status", timeout=10)
+
+
+
+# ---------------------------------------------------------------------------
 # Demo traffic
 # ---------------------------------------------------------------------------
 

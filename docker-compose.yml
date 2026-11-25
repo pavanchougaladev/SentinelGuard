@@ -2,6 +2,21 @@ services:
   api:
     build: .
     restart: unless-stopped
+    environment:
+      - AWS_REGION=${AWS_REGION:-us-east-1}
+      - BEDROCK_VLM_MODEL_ID=${BEDROCK_VLM_MODEL_ID:-anthropic.claude-3-5-sonnet-20240620-v1:0}
+      - BEDROCK_VLM_ENABLED=${BEDROCK_VLM_ENABLED:-1}
+      - CHEQUE_VLM_BACKEND=${CHEQUE_VLM_BACKEND:-auto}
+      - CHEQUE_MAX_IMAGE_MB=${CHEQUE_MAX_IMAGE_MB:-8}
+      - CHEQUE_AUDIT_PATH=${CHEQUE_AUDIT_PATH:-models/cheque_audit.jsonl}
+      - ONLINE_MODEL_PATH=${ONLINE_MODEL_PATH:-models/online_model.pkl}
+      - ONLINE_EVENT_LOG=${ONLINE_EVENT_LOG:-models/online_events.jsonl}
+      - ONLINE_BOOTSTRAP_PATH=${ONLINE_BOOTSTRAP_PATH:-data/transactions.csv}
+      - FEDERATED_REPORT_PATH=${FEDERATED_REPORT_PATH:-models/federated_report.json}
+      # Bare names are passed only when set on the host / in .env.
+      - AWS_ACCESS_KEY_ID
+      - AWS_SECRET_ACCESS_KEY
+      - AWS_SESSION_TOKEN
     ports: ["8000:8000"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8000/health', timeout=3)"]

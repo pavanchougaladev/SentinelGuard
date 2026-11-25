@@ -10,3 +10,7 @@ pydantic
 prometheus-client
 streamlit>=1.67
 requests
+boto3>=1.34
+Pillow>=10
+python-multipart>=0.0.9
+river==0.27.0
